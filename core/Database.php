@@ -5,10 +5,11 @@
  */
 
 class Database {
-    private $host = "localhost";
-    private $database_name = "msu_attendance_db";
-    private $username = "root";
-    private $password = "";
+    private $host = "bgdjd7pnoftx1p4yq4bj-mysql.services.clever-cloud.com";
+    private $database_name = "bgdjd7pnoftx1p4yq4bj";
+    private $username = "u3miutjfjda1dnby";
+    private $password = "mZgVKFLZ31Dm4i7GbWQS"; // ← palitan ito ng actual password mo
+    private $port = "3306";
     public $conn;
 
     /**
@@ -20,7 +21,7 @@ class Database {
 
         try {
             $this->conn = new PDO(
-                "mysql:host=" . $this->host . ";dbname=" . $this->database_name,
+                "mysql:host=" . $this->host . ";dbname=" . $this->database_name . ";port=" . $this->port,
                 $this->username,
                 $this->password
             );
