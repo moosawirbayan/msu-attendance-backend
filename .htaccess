@@ -1,0 +1,16 @@
+# CORS is handled by PHP (config/cors.php and core/cors.php).
+# Do NOT set CORS headers here — it causes duplicate headers (*, *) on XAMPP.
+
+# Handle OPTIONS requests
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteRule ^(.*)$ $1 [R=200,L]
+</IfModule>
+
+# PHP Settings
+php_flag display_errors On
+php_value error_reporting E_ALL
+
+# Set default charset
+AddDefaultCharset UTF-8
