@@ -50,8 +50,7 @@ try {
         echo json_encode(['success' => false, 'message' => 'Access denied']); exit();
     }
 
-    // Get all ACTIVE enrolled students
-    // ── FIXED: added email, phone, and gender (COALESCE handles both 'gender' and 'sex' column names)
+    // Get all ACTIVE enrolled students with all fields from students table
     $stmtStudents = $db->prepare("
         SELECT
             s.id,
@@ -59,9 +58,13 @@ try {
             s.first_name,
             s.middle_initial,
             s.last_name,
-            COALESCE(s.email, '')  AS email,
-            COALESCE(s.phone, '')  AS phone,
-            COALESCE(s.gender, s.sex, '') AS gender
+            COALESCE(s.gender, '')       AS gender,
+            COALESCE(s.email, '')        AS email,
+            COALESCE(s.parent_email, '') AS parent_email,
+            COALESCE(s.parent_name, '')  AS parent_name,
+            COALESCE(s.phone, '')        AS phone,
+            COALESCE(s.program, '')      AS program,
+            COALESCE(s.year_level, '')   AS year_level
         FROM students s
         INNER JOIN enrollments e ON e.student_id = s.id
         WHERE e.class_id = ? AND e.status = 'active'
@@ -126,20 +129,24 @@ try {
             : 0;
 
         $result[] = [
-            'id'              => $student['id'],
-            'student_id'      => $student['student_id'],
-            'first_name'      => $student['first_name'],
-            'middle_initial'  => $student['middle_initial'],
-            'last_name'       => $student['last_name'],
-            'email'           => $student['email'],   // ← ADDED
-            'phone'           => $student['phone'],   // ← ADDED
-            'gender'          => $student['gender'],  // ← ADDED
-            'day_records'     => $dayRecords,
-            'present_count'   => $presentCount,
-            'absent_count'    => $absentCount,
-            'late_count'      => $lateCount,          // ← ADDED (bonus)
-            'total_sessions'  => $totalSessions,
-            'attendance_rate' => $attendanceRate,
+            'id'             => $student['id'],
+            'student_id'     => $student['student_id'],
+            'first_name'     => $student['first_name'],
+            'middle_initial' => $student['middle_initial'],
+            'last_name'      => $student['last_name'],
+            'gender'         => $student['gender'],
+            'email'          => $student['email'],
+            'parent_email'   => $student['parent_email'],
+            'parent_name'    => $student['parent_name'],
+            'phone'          => $student['phone'],
+            'program'        => $student['program'],
+            'year_level'     => $student['year_level'],
+            'day_records'    => $dayRecords,
+            'present_count'  => $presentCount,
+            'absent_count'   => $absentCount,
+            'late_count'     => $lateCount,
+            'total_sessions' => $totalSessions,
+            'attendance_rate'=> $attendanceRate,
         ];
     }
 
