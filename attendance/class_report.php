@@ -51,8 +51,17 @@ try {
     }
 
     // Get all ACTIVE enrolled students
+    // ── FIXED: added email, phone, and gender (COALESCE handles both 'gender' and 'sex' column names)
     $stmtStudents = $db->prepare("
-        SELECT s.id, s.student_id, s.first_name, s.middle_initial, s.last_name
+        SELECT
+            s.id,
+            s.student_id,
+            s.first_name,
+            s.middle_initial,
+            s.last_name,
+            COALESCE(s.email, '')  AS email,
+            COALESCE(s.phone, '')  AS phone,
+            COALESCE(s.gender, s.sex, '') AS gender
         FROM students s
         INNER JOIN enrollments e ON e.student_id = s.id
         WHERE e.class_id = ? AND e.status = 'active'
@@ -96,12 +105,16 @@ try {
         $dayRecords   = [];
         $presentCount = 0;
         $absentCount  = 0;
+        $lateCount    = 0;
 
         foreach ($sessionDates as $date) {
             $status = $attByStudent[$student['id']][$date] ?? 'absent';
             $dayRecords[] = ['date' => $date, 'status' => $status];
-            if ($status === 'present' || $status === 'late') {
+            if ($status === 'present') {
                 $presentCount++;
+            } elseif ($status === 'late') {
+                $presentCount++; // late counts as present for attendance rate
+                $lateCount++;
             } else {
                 $absentCount++;
             }
@@ -113,16 +126,20 @@ try {
             : 0;
 
         $result[] = [
-            'id'             => $student['id'],
-            'student_id'     => $student['student_id'],
-            'first_name'     => $student['first_name'],
-            'middle_initial' => $student['middle_initial'],
-            'last_name'      => $student['last_name'],
-            'day_records'    => $dayRecords,
-            'present_count'  => $presentCount,
-            'absent_count'   => $absentCount,
-            'total_sessions' => $totalSessions,
-            'attendance_rate'=> $attendanceRate,
+            'id'              => $student['id'],
+            'student_id'      => $student['student_id'],
+            'first_name'      => $student['first_name'],
+            'middle_initial'  => $student['middle_initial'],
+            'last_name'       => $student['last_name'],
+            'email'           => $student['email'],   // ← ADDED
+            'phone'           => $student['phone'],   // ← ADDED
+            'gender'          => $student['gender'],  // ← ADDED
+            'day_records'     => $dayRecords,
+            'present_count'   => $presentCount,
+            'absent_count'    => $absentCount,
+            'late_count'      => $lateCount,          // ← ADDED (bonus)
+            'total_sessions'  => $totalSessions,
+            'attendance_rate' => $attendanceRate,
         ];
     }
 
