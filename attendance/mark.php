@@ -21,6 +21,9 @@ if ($notificationServiceAvailable) {
 $database = new Database();
 $db = $database->getConnection();
 
+// ✅ Set PH timezone
+$db->exec("SET time_zone = '+08:00'");
+
 $data = json_decode(file_get_contents("php://input"));
 
 $studentDbId = $data->studentId ?? null;
@@ -125,7 +128,7 @@ try {
         'student_name'    => $fullName,
         'student_number'  => $student['student_id'],
         'attendance_id'   => $attendanceId,
-        'action'          => $action,       // 'updated' or 'inserted'
+        'action'          => $action,
         'parent_notified' => $notificationSent,
     ]);
 
