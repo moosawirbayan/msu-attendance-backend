@@ -21,9 +21,11 @@ if ($notificationServiceAvailable) {
 $database = new Database();
 $db = $database->getConnection();
 
-// ✅ Set UTC sa database, PH time sa PHP
-$db->exec("SET time_zone = 'UTC'");
-date_default_timezone_set('Asia/Manila');
+// ✅ Get PH time by adding +8 hours to UTC
+$phNow  = new DateTime('now', new DateTimeZone('UTC'));
+$phNow->modify('+8 hours');
+$phTime = $phNow->format('Y-m-d H:i:s');
+$today  = $phNow->format('Y-m-d');
 
 $data = json_decode(file_get_contents("php://input"));
 
@@ -68,30 +70,24 @@ try {
         exit();
     }
 
-    // ✅ PH time para sa today check at check_in_time
-    $phNow  = new DateTime('now', new DateTimeZone('Asia/Manila'));
-    $today  = $phNow->format('Y-m-d');
-    $phTime = $phNow->format('Y-m-d H:i:s');
-
     // Check if may existing attendance record ngayon
     $dupStmt = $db->prepare("
         SELECT id, status 
         FROM attendance 
         WHERE student_id = ? AND class_id = ? 
-        AND DATE(CONVERT_TZ(check_in_time, '+00:00', '+08:00')) = ?
+        AND DATE(check_in_time) = ?
     ");
     $dupStmt->execute([$studentDbId, $classId, $today]);
     $existing = $dupStmt->fetch(PDO::FETCH_ASSOC);
 
     if ($existing) {
         if ($existing['status'] === 'present') {
-            // Naka-present na — block double scan
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Attendance already marked as present for today']);
             exit();
         }
 
-        // Status ay 'absent' — i-UPDATE to present via QR scan
+        // Status ay 'absent' — i-UPDATE to present
         $updateStmt = $db->prepare("UPDATE attendance SET status = 'present', check_in_time = ? WHERE id = ?");
         $updateStmt->execute([$phTime, $existing['id']]);
         $attendanceId = $existing['id'];
