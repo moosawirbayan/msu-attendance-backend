@@ -47,11 +47,11 @@ try {
 
     // Get total CURRENTLY enrolled students across all classes
     $enrolledStmt = $db->prepare("
-        SELECT COUNT(DISTINCT e.student_id) as total 
-        FROM enrollments e 
-        JOIN classes c ON e.class_id = c.id 
-        WHERE c.instructor_id = ?
-    ");
+    SELECT COUNT(e.student_id) as total 
+    FROM enrollments e 
+    JOIN classes c ON e.class_id = c.id 
+    WHERE c.instructor_id = ?
+");
     $enrolledStmt->execute([$userId]);
     $enrolled = $enrolledStmt->fetch(PDO::FETCH_ASSOC);
 
