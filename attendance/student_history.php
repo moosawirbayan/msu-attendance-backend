@@ -16,8 +16,7 @@ require_once '../core/Database.php';
 $database = new Database();
 $db = $database->getConnection();
 
-// ✅ PHP timezone lang — PH time na ang stored sa DB
-date_default_timezone_set('Asia/Manila');
+// ✅ No timezone conversion — check_in_time is already stored as PH time
 
 $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? (function_exists('getallheaders') ? (getallheaders()['Authorization'] ?? '') : '');
 $token = str_replace('Bearer ', '', $authHeader);
@@ -50,9 +49,9 @@ try {
     }
 
     // ✅ Get ALL unique session dates for this class
+    // Use DATE() directly — no timezone conversion since stored as PH time
     $datesStmt = $db->prepare("
-        SELECT DISTINCT
-            DATE_FORMAT(a.check_in_time, '%Y-%m-%d') AS date
+        SELECT DISTINCT DATE(a.check_in_time) AS date
         FROM attendance a
         WHERE a.class_id = ?
         ORDER BY date DESC
@@ -63,8 +62,8 @@ try {
     // ✅ Get actual attendance records for THIS student only
     $stmt = $db->prepare("
         SELECT
-            DATE_FORMAT(a.check_in_time, '%Y-%m-%d') AS date,
-            DATE_FORMAT(a.check_in_time, '%h:%i %p')  AS time_in,
+            DATE(a.check_in_time)                      AS date,
+            DATE_FORMAT(a.check_in_time, '%h:%i %p')   AS time_in,
             a.status
         FROM attendance a
         WHERE a.student_id = ? AND a.class_id = ?
