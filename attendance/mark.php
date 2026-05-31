@@ -21,6 +21,12 @@ if ($notificationServiceAvailable) {
 $database = new Database();
 $db = $database->getConnection();
 
+// ✅ PH time — UTC + 8 hours (Render server is UTC)
+$phNow  = new DateTime('now', new DateTimeZone('UTC'));
+$phNow->modify('+8 hours');
+$phTime = $phNow->format('Y-m-d H:i:s');
+$today  = $phNow->format('Y-m-d');
+
 $data = json_decode(file_get_contents("php://input"));
 
 $studentDbId = $data->studentId ?? null;
@@ -64,36 +70,43 @@ try {
         exit();
     }
 
-    // Check if may existing attendance record ngayon (absent o present)
-    $today = (new DateTime('now', new DateTimeZone('Asia/Manila')))->format('Y-m-d');
-    $dupStmt = $db->prepare("SELECT id, status FROM attendance WHERE student_id = ? AND class_id = ? AND DATE(check_in_time) = ?");
+    // ✅ Check existing attendance using PH today date
+    $dupStmt = $db->prepare("
+        SELECT id, status 
+        FROM attendance 
+        WHERE student_id = ? AND class_id = ? AND DATE(check_in_time) = ?
+    ");
     $dupStmt->execute([$studentDbId, $classId, $today]);
     $existing = $dupStmt->fetch(PDO::FETCH_ASSOC);
 
     if ($existing) {
         if ($existing['status'] === 'present') {
-            // Naka-present na — block na, ayaw nating double scan
+            // Already present — block double scan
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Attendance already marked as present for today']);
             exit();
         }
 
-        // Status ay 'absent' — i-UPDATE to present via QR scan
-        $updateStmt = $db->prepare("UPDATE attendance SET status = 'present', check_in_time = NOW() WHERE id = ?");
-        $updateStmt->execute([$existing['id']]);
+        // Status is 'absent' — update to present via QR scan
+        $updateStmt = $db->prepare("UPDATE attendance SET status = 'present', check_in_time = ? WHERE id = ?");
+        $updateStmt->execute([$phTime, $existing['id']]);
         $attendanceId = $existing['id'];
         $action = 'updated';
 
     } else {
-        // Walang record pa — INSERT as present
-        $markStmt = $db->prepare("INSERT INTO attendance (student_id, class_id, check_in_time, status) VALUES (?, ?, NOW(), 'present')");
-        $markStmt->execute([$studentDbId, $classId]);
+        // No record yet — INSERT as present with PH time
+        $markStmt = $db->prepare("INSERT INTO attendance (student_id, class_id, check_in_time, status) VALUES (?, ?, ?, 'present')");
+        $markStmt->execute([$studentDbId, $classId, $phTime]);
         $attendanceId = $db->lastInsertId();
         $action = 'inserted';
     }
 
-    $nameParts = array_filter([$student['first_name'], $student['middle_initial'] ? $student['middle_initial'].'.' : null, $student['last_name']]);
-    $fullName  = implode(' ', $nameParts);
+    $nameParts = array_filter([
+        $student['first_name'],
+        $student['middle_initial'] ? $student['middle_initial'].'.' : null,
+        $student['last_name']
+    ]);
+    $fullName = implode(' ', $nameParts);
 
     // Send email notification to parent/guardian if enabled for this class
     $notificationSent = false;
@@ -114,7 +127,7 @@ try {
                 $fullName,
                 $class['class_name'] ?? 'Class',
                 'present',
-                date('Y-m-d H:i:s')
+                $phTime
             );
         }
     }
@@ -125,7 +138,7 @@ try {
         'student_name'    => $fullName,
         'student_number'  => $student['student_id'],
         'attendance_id'   => $attendanceId,
-        'action'          => $action,       // 'updated' or 'inserted'
+        'action'          => $action,
         'parent_notified' => $notificationSent,
     ]);
 
