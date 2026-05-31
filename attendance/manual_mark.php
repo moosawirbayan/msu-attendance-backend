@@ -23,6 +23,11 @@ if ($notificationServiceAvailable) {
 $database = new Database();
 $db = $database->getConnection();
 
+// ✅ PH time — UTC + 8 hours
+$phNow   = new DateTime('now', new DateTimeZone('UTC'));
+$phNow->modify('+8 hours');
+$phTime  = $phNow->format('H:i:s');
+
 $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? (function_exists('getallheaders') ? (getallheaders()['Authorization'] ?? '') : '');
 $token = str_replace('Bearer ', '', $authHeader);
 if (empty($token)) {
@@ -38,7 +43,7 @@ if (!$userId) {
 
 $body    = json_decode(file_get_contents('php://input'), true);
 $classId = $body['classId'] ?? null;
-$date    = $body['date']    ?? date('Y-m-d');
+$date    = $body['date']    ?? $phNow->format('Y-m-d');
 $records = $body['records'] ?? [];
 
 if (!$classId || empty($records)) {
@@ -75,7 +80,7 @@ try {
 
         if ($studentId <= 0 || !in_array($status, $validStatuses)) continue;
 
-        // Check if a record already exists for this student/class/date
+        // ✅ Check existing record using DATE() directly — PH time stored
         $existing = $db->prepare("
             SELECT id FROM attendance
             WHERE student_id = ? AND class_id = ? AND DATE(check_in_time) = ?
@@ -89,8 +94,8 @@ try {
             $upd = $db->prepare("UPDATE attendance SET status = ? WHERE id = ?");
             $upd->execute([$status, $row['id']]);
         } else {
-            // Insert new record — use date + current time for the timestamp
-            $checkInTime = $date . ' ' . date('H:i:s');
+            // ✅ Insert new record — use PH time for timestamp
+            $checkInTime = $date . ' ' . $phTime;
             $ins = $db->prepare("
                 INSERT INTO attendance (student_id, class_id, check_in_time, status)
                 VALUES (?, ?, ?, ?)
@@ -101,7 +106,12 @@ try {
 
         // Send parent email only for positive attendance statuses
         if ($notifyEnabled && in_array($status, ['present', 'late'], true)) {
-            $studentStmt = $db->prepare("\n                SELECT parent_email, parent_name, first_name, middle_initial, last_name\n                FROM students\n                WHERE id = ?\n                LIMIT 1\n            ");
+            $studentStmt = $db->prepare("
+                SELECT parent_email, parent_name, first_name, middle_initial, last_name
+                FROM students
+                WHERE id = ?
+                LIMIT 1
+            ");
             $studentStmt->execute([$studentId]);
             $student = $studentStmt->fetch(PDO::FETCH_ASSOC);
 
@@ -119,7 +129,7 @@ try {
                     $fullName,
                     $class['class_name'] ?? 'Class',
                     $status,
-                    $date . ' ' . date('H:i:s')
+                    $date . ' ' . $phTime
                 )) {
                     $notificationsSent++;
                 }
