@@ -21,11 +21,12 @@ if ($notificationServiceAvailable) {
 $database = new Database();
 $db       = $database->getConnection();
 
-// ✅ PHP timezone — PH time
-date_default_timezone_set('Asia/Manila');
-
-// ✅ MySQL timezone — PH time din para consistent ang NOW()
-$db->exec("SET time_zone = '+08:00'");
+// ✅ PH time — UTC + 8 hours (Render server is UTC)
+$phNow   = new DateTime('now', new DateTimeZone('UTC'));
+$phNow->modify('+8 hours');
+$phTime  = $phNow->format('Y-m-d H:i:s');
+$today   = $phNow->format('Y-m-d');
+$nowTime = $phNow->format('H:i:s');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -54,12 +55,9 @@ try {
         exit();
     }
 
-    // ✅ PH time na dahil date_default_timezone_set('Asia/Manila')
-    $now      = date('H:i:s');
     $end_time = $class['end_time'];
-    $today    = date('Y-m-d');
 
-    if ($now < $end_time) {
+    if ($nowTime < $end_time) {
         echo json_encode([
             'success' => false,
             'marked'  => 0,
@@ -84,8 +82,7 @@ try {
         exit();
     }
 
-    // ✅ Find students who already have a record today
-    // Walang CONVERT_TZ — PH time na ang stored
+    // ✅ Find students who already have a record today using PH date
     $studentIds   = array_column($enrolled, 'student_id');
     $placeholders = implode(',', array_fill(0, count($studentIds), '?'));
 
@@ -98,10 +95,10 @@ try {
     $existingStmt->execute(array_merge([$class_id, $today], $studentIds));
     $alreadyRecorded = $existingStmt->fetchAll(PDO::FETCH_COLUMN);
 
-    // ✅ NOW() ay PH time na dahil SET time_zone = '+08:00'
+    // ✅ Insert absent with PH time
     $insertStmt = $db->prepare(
         "INSERT INTO attendance (student_id, class_id, check_in_time, status)
-         VALUES (?, ?, NOW(), 'absent')"
+         VALUES (?, ?, ?, 'absent')"
     );
 
     $notifier = null;
@@ -115,7 +112,8 @@ try {
 
         if (in_array($sid, $alreadyRecorded)) continue;
 
-        $insertStmt->execute([$sid, $class_id]);
+        // ✅ Use PH time for check_in_time
+        $insertStmt->execute([$sid, $class_id, $phTime]);
         $markedCount++;
 
         // Send parent email (non-blocking)
@@ -134,7 +132,7 @@ try {
                     $fullName,
                     $class['class_name'] ?? 'Class',
                     'absent',
-                    date('Y-m-d H:i:s') // ✅ PH time na ito
+                    $phTime
                 );
             } catch (Exception $notifErr) {
                 error_log("Auto-absent email error for student $sid: " . $notifErr->getMessage());
