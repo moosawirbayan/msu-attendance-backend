@@ -14,10 +14,12 @@ require_once '../core/Database.php';
 $database = new Database();
 $db = $database->getConnection();
 
-$phNow  = new DateTime('now', new DateTimeZone('UTC'));
-$phNow->modify('+8 hours');
-$today  = $phNow->format('Y-m-d');
-$displayDate = $phNow->format('l, F j, Y');
+// ✅ MySQL timezone sa PH
+$db->exec("SET time_zone = '+08:00'");
+
+// ✅ PHP timezone sa PH — para consistent lahat
+date_default_timezone_set('Asia/Manila');
+$today = date('Y-m-d');
 
 $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? (function_exists('getallheaders') ? (getallheaders()['Authorization'] ?? '') : '');
 $token = str_replace('Bearer ', '', $authHeader);
@@ -38,25 +40,30 @@ if (!$userId) {
 }
 
 try {
+    // Get instructor info
     $userStmt = $db->prepare("SELECT name FROM users WHERE id = ?");
     $userStmt->execute([$userId]);
     $user = $userStmt->fetch(PDO::FETCH_ASSOC);
 
-    $enrolledStmt = $db->prepare("
-        SELECT COUNT(e.student_id) as total 
-        FROM enrollments e 
-        JOIN classes c ON e.class_id = c.id 
-        WHERE c.instructor_id = ?
-    ");
-    $enrolledStmt->execute([$userId]);
-    $enrolled = $enrolledStmt->fetch(PDO::FETCH_ASSOC);
+    // Get total CURRENTLY enrolled students across all classes
+   $enrolledStmt = $db->prepare("
+    SELECT COUNT(e.student_id) as total 
+    FROM enrollments e 
+    JOIN classes c ON e.class_id = c.id 
+    WHERE c.instructor_id = ?
+");
+$enrolledStmt->execute([$userId]);
+$enrolled = $enrolledStmt->fetch(PDO::FETCH_ASSOC);
 
+    // Get total classes
     $classesStmt = $db->prepare("SELECT COUNT(*) as total FROM classes WHERE instructor_id = ?");
     $classesStmt->execute([$userId]);
     $classCount = $classesStmt->fetch(PDO::FETCH_ASSOC);
 
+    // ✅ FIXED: Present today — COUNT DISTINCT student_id para hindi mag-duplicate
+    // Kung enrolled ang student sa 2 classes at nag-scan sa dalawa, isa lang siya bilhin
     $presentStmt = $db->prepare("
-        SELECT COUNT(*) as total 
+        SELECT COUNT(DISTINCT a.student_id) as total 
         FROM attendance a 
         JOIN classes c ON a.class_id = c.id 
         JOIN enrollments e 
@@ -76,10 +83,9 @@ try {
         ? min(100, round(($presentCount / $totalEnrolled) * 100))
         : 0;
 
-    // ✅ FIXED: ORDER BY a.id DESC — pinaka-bagong nag-scan nasa taas
+    // ✅ Recent attendance — PH time
     $recentStmt = $db->prepare("
         SELECT
-            a.id,
             CONCAT(
                 s.first_name,
                 CASE WHEN s.middle_initial IS NOT NULL 
@@ -98,13 +104,13 @@ try {
             ON e.student_id = a.student_id
             AND e.class_id = a.class_id
         WHERE c.instructor_id = ?
-        AND DATE(a.check_in_time) = ?
-        ORDER BY a.id DESC
-        LIMIT 10
+        ORDER BY a.check_in_time DESC
+        LIMIT 5
     ");
-    $recentStmt->execute([$userId, $today]);
+    $recentStmt->execute([$userId]);
     $recentAttendance = $recentStmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // ✅ Class breakdown — per subject attendance today
     $breakdownStmt = $db->prepare("
         SELECT
             c.class_code,
@@ -127,6 +133,7 @@ try {
     $breakdownStmt->execute([$today, $userId]);
     $classBreakdownRaw = $breakdownStmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // Format breakdown — cast to int
     $classBreakdown = array_map(function($row) {
         return [
             'class_code' => $row['class_code'],
@@ -136,6 +143,7 @@ try {
         ];
     }, $classBreakdownRaw);
 
+    // ✅ Active Classes — is_active = 1 lang
     $activeStmt = $db->prepare("
         SELECT
             c.id,
@@ -164,6 +172,9 @@ try {
             'total_students' => (int)$row['total_students'],
         ];
     }, $activeClassesRaw);
+
+    // ✅ Display date — PH time galing sa PHP
+    $displayDate = date('l, F j, Y');
 
     echo json_encode([
         'success' => true,
