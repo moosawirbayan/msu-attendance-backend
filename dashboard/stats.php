@@ -14,8 +14,6 @@ require_once '../core/Database.php';
 $database = new Database();
 $db = $database->getConnection();
 
-// ✅ No timezone conversion — check_in_time is already stored as PH time
-// ✅ PHP: get today's date in PH time by adding +8 to UTC
 $phNow  = new DateTime('now', new DateTimeZone('UTC'));
 $phNow->modify('+8 hours');
 $today  = $phNow->format('Y-m-d');
@@ -40,12 +38,10 @@ if (!$userId) {
 }
 
 try {
-    // Get instructor info
     $userStmt = $db->prepare("SELECT name FROM users WHERE id = ?");
     $userStmt->execute([$userId]);
     $user = $userStmt->fetch(PDO::FETCH_ASSOC);
 
-    // Get total enrolled students across all classes
     $enrolledStmt = $db->prepare("
         SELECT COUNT(e.student_id) as total 
         FROM enrollments e 
@@ -55,12 +51,10 @@ try {
     $enrolledStmt->execute([$userId]);
     $enrolled = $enrolledStmt->fetch(PDO::FETCH_ASSOC);
 
-    // Get total classes
     $classesStmt = $db->prepare("SELECT COUNT(*) as total FROM classes WHERE instructor_id = ?");
     $classesStmt->execute([$userId]);
     $classCount = $classesStmt->fetch(PDO::FETCH_ASSOC);
 
-    // Present today — check_in_time is PH time, compare directly
     $presentStmt = $db->prepare("
         SELECT COUNT(*) as total 
         FROM attendance a 
@@ -82,7 +76,7 @@ try {
         ? min(100, round(($presentCount / $totalEnrolled) * 100))
         : 0;
 
-    // Recent attendance — return check_in_time as-is (already PH time)
+    // ✅ FIXED: Added DATE filter — today's records only, sorted DESC
     $recentStmt = $db->prepare("
         SELECT
             CONCAT(
@@ -103,13 +97,13 @@ try {
             ON e.student_id = a.student_id
             AND e.class_id = a.class_id
         WHERE c.instructor_id = ?
+        AND DATE(a.check_in_time) = ?
         ORDER BY a.check_in_time DESC
-        LIMIT 5
+        LIMIT 10
     ");
-    $recentStmt->execute([$userId]);
+    $recentStmt->execute([$userId, $today]);
     $recentAttendance = $recentStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Class breakdown — per subject attendance today
     $breakdownStmt = $db->prepare("
         SELECT
             c.class_code,
@@ -141,7 +135,6 @@ try {
         ];
     }, $classBreakdownRaw);
 
-    // Active Classes
     $activeStmt = $db->prepare("
         SELECT
             c.id,
