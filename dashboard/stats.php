@@ -14,12 +14,12 @@ require_once '../core/Database.php';
 $database = new Database();
 $db = $database->getConnection();
 
-// ✅ MySQL timezone sa PH
-$db->exec("SET time_zone = '+08:00'");
-
-// ✅ PHP timezone sa PH — para consistent lahat
-date_default_timezone_set('Asia/Manila');
-$today = date('Y-m-d');
+// ✅ No timezone conversion — check_in_time is already stored as PH time
+// ✅ PHP: get today's date in PH time by adding +8 to UTC
+$phNow  = new DateTime('now', new DateTimeZone('UTC'));
+$phNow->modify('+8 hours');
+$today  = $phNow->format('Y-m-d');
+$displayDate = $phNow->format('l, F j, Y');
 
 $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? (function_exists('getallheaders') ? (getallheaders()['Authorization'] ?? '') : '');
 $token = str_replace('Bearer ', '', $authHeader);
@@ -45,13 +45,13 @@ try {
     $userStmt->execute([$userId]);
     $user = $userStmt->fetch(PDO::FETCH_ASSOC);
 
-    // Get total CURRENTLY enrolled students across all classes
+    // Get total enrolled students across all classes
     $enrolledStmt = $db->prepare("
-    SELECT COUNT(e.student_id) as total 
-    FROM enrollments e 
-    JOIN classes c ON e.class_id = c.id 
-    WHERE c.instructor_id = ?
-");
+        SELECT COUNT(e.student_id) as total 
+        FROM enrollments e 
+        JOIN classes c ON e.class_id = c.id 
+        WHERE c.instructor_id = ?
+    ");
     $enrolledStmt->execute([$userId]);
     $enrolled = $enrolledStmt->fetch(PDO::FETCH_ASSOC);
 
@@ -60,7 +60,7 @@ try {
     $classesStmt->execute([$userId]);
     $classCount = $classesStmt->fetch(PDO::FETCH_ASSOC);
 
-    // ✅ Present today — PH time, enrolled students only
+    // Present today — check_in_time is PH time, compare directly
     $presentStmt = $db->prepare("
         SELECT COUNT(*) as total 
         FROM attendance a 
@@ -82,7 +82,7 @@ try {
         ? min(100, round(($presentCount / $totalEnrolled) * 100))
         : 0;
 
-    // ✅ Recent attendance — PH time
+    // Recent attendance — return check_in_time as-is (already PH time)
     $recentStmt = $db->prepare("
         SELECT
             CONCAT(
@@ -109,7 +109,7 @@ try {
     $recentStmt->execute([$userId]);
     $recentAttendance = $recentStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // ✅ Class breakdown — per subject attendance today
+    // Class breakdown — per subject attendance today
     $breakdownStmt = $db->prepare("
         SELECT
             c.class_code,
@@ -132,7 +132,6 @@ try {
     $breakdownStmt->execute([$today, $userId]);
     $classBreakdownRaw = $breakdownStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Format breakdown — cast to int
     $classBreakdown = array_map(function($row) {
         return [
             'class_code' => $row['class_code'],
@@ -142,7 +141,7 @@ try {
         ];
     }, $classBreakdownRaw);
 
-    // ✅ Active Classes — is_active = 1 lang
+    // Active Classes
     $activeStmt = $db->prepare("
         SELECT
             c.id,
@@ -172,9 +171,6 @@ try {
         ];
     }, $activeClassesRaw);
 
-    // ✅ Display date — PH time galing sa PHP
-    $displayDate = date('l, F j, Y');
-
     echo json_encode([
         'success' => true,
         'data'    => [
@@ -187,7 +183,7 @@ try {
             'attendanceRate'   => $attendanceRate,
             'recentAttendance' => $recentAttendance,
             'classBreakdown'   => $classBreakdown,
-            'activeClasses'    => $activeClasses,  // ✅ Bagong field
+            'activeClasses'    => $activeClasses,
         ]
     ]);
 
