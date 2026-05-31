@@ -76,9 +76,10 @@ try {
         ? min(100, round(($presentCount / $totalEnrolled) * 100))
         : 0;
 
-    // ✅ FIXED: Added DATE filter — today's records only, sorted DESC
+    // ✅ FIXED: ORDER BY a.id DESC — pinaka-bagong nag-scan nasa taas
     $recentStmt = $db->prepare("
         SELECT
+            a.id,
             CONCAT(
                 s.first_name,
                 CASE WHEN s.middle_initial IS NOT NULL 
@@ -98,7 +99,7 @@ try {
             AND e.class_id = a.class_id
         WHERE c.instructor_id = ?
         AND DATE(a.check_in_time) = ?
-        ORDER BY a.check_in_time DESC
+        ORDER BY a.id DESC
         LIMIT 10
     ");
     $recentStmt->execute([$userId, $today]);
