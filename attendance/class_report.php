@@ -6,7 +6,6 @@ header("Content-Type: application/json");
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(200); exit(); }
 
-// SIMPLE DEBUG — walang database needed
 if (isset($_GET['debug'])) {
     echo json_encode(['debug' => 'OK', 'time' => date('Y-m-d H:i:s'), 'file' => __FILE__]);
     exit();
@@ -39,8 +38,8 @@ if (!$classId) {
 try {
     // Verify ownership
     $chk = $db->prepare("
-        SELECT id, class_name, class_code, section 
-        FROM classes 
+        SELECT id, class_name, class_code, section
+        FROM classes
         WHERE id = ? AND instructor_id = ?
     ");
     $chk->execute([$classId, $userId]);
@@ -50,7 +49,28 @@ try {
         echo json_encode(['success' => false, 'message' => 'Access denied']); exit();
     }
 
-    // Get all ACTIVE enrolled students with all fields from students table
+    // ── NEW: Get cancelled dates for this class ───────────────────────────────
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS cancelled_classes (
+            id         INT AUTO_INCREMENT PRIMARY KEY,
+            class_id   INT  NOT NULL,
+            date       DATE NOT NULL,
+            reason     VARCHAR(255) DEFAULT NULL,
+            created_at DATETIME DEFAULT NOW(),
+            UNIQUE KEY uq_class_date (class_id, date)
+        )
+    ");
+
+    $cancelStmt = $db->prepare("
+        SELECT date, reason FROM cancelled_classes
+        WHERE class_id = ?
+        ORDER BY date ASC
+    ");
+    $cancelStmt->execute([$classId]);
+    $cancelledRows  = $cancelStmt->fetchAll(PDO::FETCH_ASSOC);
+    $cancelledDates = array_column($cancelledRows, 'date'); // ['2026-06-01', ...]
+
+    // Get all active enrolled students
     $stmtStudents = $db->prepare("
         SELECT
             s.id,
@@ -73,27 +93,54 @@ try {
     $stmtStudents->execute([$classId]);
     $students = $stmtStudents->fetchAll(PDO::FETCH_ASSOC);
 
-    // Get all attendance records
-    $stmtAtt = $db->prepare("
-        SELECT
-            a.student_id,
-            DATE(a.check_in_time) AS date,
-            a.status
-        FROM attendance a
-        WHERE a.class_id = ?
-        ORDER BY a.check_in_time ASC
-    ");
-    $stmtAtt->execute([$classId]);
+    // Get attendance records — EXCLUDING cancelled dates
+    if (!empty($cancelledDates)) {
+        $cancelPlaceholders = implode(',', array_fill(0, count($cancelledDates), '?'));
+        $stmtAtt = $db->prepare("
+            SELECT
+                a.student_id,
+                DATE(a.check_in_time) AS date,
+                a.status
+            FROM attendance a
+            WHERE a.class_id = ?
+              AND DATE(a.check_in_time) NOT IN ($cancelPlaceholders)
+            ORDER BY a.check_in_time ASC
+        ");
+        $stmtAtt->execute(array_merge([$classId], $cancelledDates));
+    } else {
+        $stmtAtt = $db->prepare("
+            SELECT
+                a.student_id,
+                DATE(a.check_in_time) AS date,
+                a.status
+            FROM attendance a
+            WHERE a.class_id = ?
+            ORDER BY a.check_in_time ASC
+        ");
+        $stmtAtt->execute([$classId]);
+    }
     $allAttendance = $stmtAtt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Get unique session dates
-    $stmtDates = $db->prepare("
-        SELECT DISTINCT DATE(check_in_time) AS date
-        FROM attendance
-        WHERE class_id = ?
-        ORDER BY date ASC
-    ");
-    $stmtDates->execute([$classId]);
+    // Get unique session dates — EXCLUDING cancelled dates
+    if (!empty($cancelledDates)) {
+        $cancelPlaceholders = implode(',', array_fill(0, count($cancelledDates), '?'));
+        $stmtDates = $db->prepare("
+            SELECT DISTINCT DATE(check_in_time) AS date
+            FROM attendance
+            WHERE class_id = ?
+              AND DATE(check_in_time) NOT IN ($cancelPlaceholders)
+            ORDER BY date ASC
+        ");
+        $stmtDates->execute(array_merge([$classId], $cancelledDates));
+    } else {
+        $stmtDates = $db->prepare("
+            SELECT DISTINCT DATE(check_in_time) AS date
+            FROM attendance
+            WHERE class_id = ?
+            ORDER BY date ASC
+        ");
+        $stmtDates->execute([$classId]);
+    }
     $sessionDates = array_column($stmtDates->fetchAll(PDO::FETCH_ASSOC), 'date');
 
     // Group attendance by student id => date => status
@@ -102,7 +149,7 @@ try {
         $attByStudent[$rec['student_id']][$rec['date']] = $rec['status'];
     }
 
-    // Build student records with day_records
+    // Build student records
     $result = [];
     foreach ($students as $student) {
         $dayRecords   = [];
@@ -116,7 +163,7 @@ try {
             if ($status === 'present') {
                 $presentCount++;
             } elseif ($status === 'late') {
-                $presentCount++; // late counts as present for attendance rate
+                $presentCount++;
                 $lateCount++;
             } else {
                 $absentCount++;
@@ -129,24 +176,24 @@ try {
             : 0;
 
         $result[] = [
-            'id'             => $student['id'],
-            'student_id'     => $student['student_id'],
-            'first_name'     => $student['first_name'],
-            'middle_initial' => $student['middle_initial'],
-            'last_name'      => $student['last_name'],
-            'gender'         => $student['gender'],
-            'email'          => $student['email'],
-            'parent_email'   => $student['parent_email'],
-            'parent_name'    => $student['parent_name'],
-            'phone'          => $student['phone'],
-            'program'        => $student['program'],
-            'year_level'     => $student['year_level'],
-            'day_records'    => $dayRecords,
-            'present_count'  => $presentCount,
-            'absent_count'   => $absentCount,
-            'late_count'     => $lateCount,
-            'total_sessions' => $totalSessions,
-            'attendance_rate'=> $attendanceRate,
+            'id'              => $student['id'],
+            'student_id'      => $student['student_id'],
+            'first_name'      => $student['first_name'],
+            'middle_initial'  => $student['middle_initial'],
+            'last_name'       => $student['last_name'],
+            'gender'          => $student['gender'],
+            'email'           => $student['email'],
+            'parent_email'    => $student['parent_email'],
+            'parent_name'     => $student['parent_name'],
+            'phone'           => $student['phone'],
+            'program'         => $student['program'],
+            'year_level'      => $student['year_level'],
+            'day_records'     => $dayRecords,
+            'present_count'   => $presentCount,
+            'absent_count'    => $absentCount,
+            'late_count'      => $lateCount,
+            'total_sessions'  => $totalSessions,
+            'attendance_rate' => $attendanceRate,
         ];
     }
 
@@ -154,9 +201,10 @@ try {
         'success'      => true,
         'generated_at' => date('Y-m-d H:i:s'),
         'summary'      => [
-            'total_enrolled' => count($students),
-            'total_sessions' => count($sessionDates),
-            'session_dates'  => $sessionDates,
+            'total_enrolled'  => count($students),
+            'total_sessions'  => count($sessionDates),
+            'session_dates'   => $sessionDates,
+            'cancelled_dates' => $cancelledRows,  // included so frontend can show them
         ],
         'students' => $result,
     ]);

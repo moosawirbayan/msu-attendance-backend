@@ -44,6 +44,22 @@ if (!$class_id) {
 }
 
 try {
+    // ── NEW: Check if today is cancelled for this class ───────────────────────
+    $cancelCheck = $db->prepare("
+        SELECT id FROM cancelled_classes
+        WHERE class_id = ? AND date = ?
+        LIMIT 1
+    ");
+    $cancelCheck->execute([$class_id, $today]);
+    if ($cancelCheck->fetch()) {
+        echo json_encode([
+            'success' => true,
+            'marked'  => 0,
+            'message' => 'Class session is cancelled for today. No absences marked.',
+        ]);
+        exit();
+    }
+
     // Get class info
     $classStmt = $db->prepare("SELECT id, class_name, end_time, notify_parents FROM classes WHERE id = ? LIMIT 1");
     $classStmt->execute([$class_id]);
@@ -82,7 +98,7 @@ try {
         exit();
     }
 
-    // ✅ Find students who already have a record today using PH date
+    // Find students who already have a record today
     $studentIds   = array_column($enrolled, 'student_id');
     $placeholders = implode(',', array_fill(0, count($studentIds), '?'));
 
@@ -95,7 +111,7 @@ try {
     $existingStmt->execute(array_merge([$class_id, $today], $studentIds));
     $alreadyRecorded = $existingStmt->fetchAll(PDO::FETCH_COLUMN);
 
-    // ✅ Insert absent with PH time
+    // Insert absent with PH time
     $insertStmt = $db->prepare(
         "INSERT INTO attendance (student_id, class_id, check_in_time, status)
          VALUES (?, ?, ?, 'absent')"
@@ -112,11 +128,9 @@ try {
 
         if (in_array($sid, $alreadyRecorded)) continue;
 
-        // ✅ Use PH time for check_in_time
         $insertStmt->execute([$sid, $class_id, $phTime]);
         $markedCount++;
 
-        // Send parent email (non-blocking)
         if ($notifier && !empty($row['parent_email'])) {
             $nameParts = array_filter([
                 $row['first_name'],
