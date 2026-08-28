@@ -21,6 +21,12 @@ $phNow->modify('+8 hours');
 $today  = $phNow->format('Y-m-d');
 $displayDate = $phNow->format('l, F j, Y');
 
+// ── FIX: needed to determine which classes have already ENDED today,
+// so "Absent Today" only counts students whose class session is over —
+// not students whose class simply hasn't happened yet.
+$todayDayName = $phNow->format('l');   // e.g. "Monday"
+$nowTimeStr   = $phNow->format('H:i:s');
+
 $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? (function_exists('getallheaders') ? (getallheaders()['Authorization'] ?? '') : '');
 $token = str_replace('Bearer ', '', $authHeader);
 
@@ -77,10 +83,114 @@ try {
 
     $totalEnrolled  = (int)($enrolled['total'] ?? 0);
     $presentCount   = (int)($present['total']  ?? 0);
-    $absentCount    = max(0, $totalEnrolled - $presentCount);
-    $attendanceRate = $totalEnrolled > 0
-        ? min(100, round(($presentCount / $totalEnrolled) * 100))
-        : 0;
+
+    // ─────────────────────────────────────────────
+    // ✅ FIX: "Absent Today" should start at 0 and only count a student
+    // once their class session for today has actually ENDED. Previously
+    // this was `max(0, $totalEnrolled - $presentCount)`, which counted
+    // a student as absent the instant the dashboard was checked — even
+    // hours before their class was scheduled to start.
+    //
+    // Step 1: find which of this instructor's classes are scheduled for
+    // today AND whose end_time has already passed.
+    // ─────────────────────────────────────────────
+    $classSchedStmt = $db->prepare("
+        SELECT id, days, end_time
+        FROM classes
+        WHERE instructor_id = ?
+    ");
+    $classSchedStmt->execute([$userId]);
+    $allClasses = $classSchedStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $endedClassIds = [];
+    foreach ($allClasses as $cls) {
+        if (empty($cls['days']) || empty($cls['end_time'])) continue;
+
+        $scheduledDays = array_map('trim', explode(',', $cls['days']));
+        if (!in_array($todayDayName, $scheduledDays)) continue;
+
+        // end_time from DB may be "HH:MM:SS" or "HH:MM" — normalize both
+        // sides to "HH:MM:SS" so the string comparison is reliable.
+        $endTime = strlen($cls['end_time']) === 5 ? $cls['end_time'] . ':00' : $cls['end_time'];
+
+        if ($nowTimeStr >= $endTime) {
+            $endedClassIds[] = (int)$cls['id'];
+        }
+    }
+
+    // Step 2: among only those ended-today classes, count enrollments
+    // that have no 'present' or 'late' attendance record for today.
+    if (empty($endedClassIds)) {
+        $absentCount = 0;
+    } else {
+        $placeholders1 = implode(',', array_fill(0, count($endedClassIds), '?'));
+        $placeholders2 = implode(',', array_fill(0, count($endedClassIds), '?'));
+
+        $absentStmt = $db->prepare("
+            SELECT COUNT(*) as total
+            FROM enrollments e
+            WHERE e.class_id IN ($placeholders1)
+            AND NOT EXISTS (
+                SELECT 1 FROM attendance a
+                WHERE a.class_id = e.class_id
+                AND a.student_id = e.student_id
+                AND DATE(a.check_in_time) = ?
+                AND a.status IN ('present', 'late')
+            )
+        ");
+        $params = array_merge($endedClassIds, [$today]);
+        $absentStmt->execute($params);
+        $absentRow = $absentStmt->fetch(PDO::FETCH_ASSOC);
+        $absentCount = (int)($absentRow['total'] ?? 0);
+    }
+
+    // ─────────────────────────────────────────────
+    // ✅ FIX: Attendance Rate now uses the same "ended classes only" scope
+    // as absentToday, instead of dividing today's total present count by
+    // ALL enrollments (including classes that haven't happened yet).
+    // Previously a rate could look artificially low early in the day —
+    // e.g. only 2 of 10 total-enrolled students had checked in by 8am,
+    // even though the other 8 students simply hadn't had class yet.
+    //
+    // Denominator: enrollments in classes that have ended today.
+    // Numerator: of those, enrollments with a 'present' or 'late' record
+    // for today (both count as "attended" — matches the absentToday
+    // exclusion logic above).
+    // ─────────────────────────────────────────────
+    if (empty($endedClassIds)) {
+        $attendanceRate = 0;
+    } else {
+        $placeholdersRate = implode(',', array_fill(0, count($endedClassIds), '?'));
+
+        $endedEnrolledStmt = $db->prepare("
+            SELECT COUNT(*) as total
+            FROM enrollments e
+            WHERE e.class_id IN ($placeholdersRate)
+        ");
+        $endedEnrolledStmt->execute($endedClassIds);
+        $endedEnrolledCount = (int)($endedEnrolledStmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+        $placeholdersRate2 = implode(',', array_fill(0, count($endedClassIds), '?'));
+        $endedAttendedStmt = $db->prepare("
+            SELECT COUNT(*) as total
+            FROM enrollments e
+            WHERE e.class_id IN ($placeholdersRate2)
+            AND EXISTS (
+                SELECT 1 FROM attendance a
+                WHERE a.class_id = e.class_id
+                AND a.student_id = e.student_id
+                AND DATE(a.check_in_time) = ?
+                AND a.status IN ('present', 'late')
+            )
+        ");
+        $endedAttendedParams = array_merge($endedClassIds, [$today]);
+        $endedAttendedStmt->execute($endedAttendedParams);
+        $endedAttendedCount = (int)($endedAttendedStmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+        $attendanceRate = $endedEnrolledCount > 0
+            ? min(100, round(($endedAttendedCount / $endedEnrolledCount) * 100))
+            : 0;
+    }
 
     // Recent attendance — return check_in_time as-is (already PH time)
     $recentStmt = $db->prepare("
