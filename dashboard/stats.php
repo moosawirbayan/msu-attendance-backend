@@ -103,17 +103,32 @@ try {
     $allClasses = $classSchedStmt->fetchAll(PDO::FETCH_ASSOC);
 
     $endedClassIds = [];
+    $debugClassInfo = []; // ── TEMP DEBUG — remove once issue is found ──
     foreach ($allClasses as $cls) {
         if (empty($cls['days']) || empty($cls['end_time'])) continue;
 
         $scheduledDays = array_map('trim', explode(',', $cls['days']));
-        if (!in_array($todayDayName, $scheduledDays)) continue;
+        $isScheduledToday = in_array($todayDayName, $scheduledDays);
 
         // end_time from DB may be "HH:MM:SS" or "HH:MM" — normalize both
         // sides to "HH:MM:SS" so the string comparison is reliable.
         $endTime = strlen($cls['end_time']) === 5 ? $cls['end_time'] . ':00' : $cls['end_time'];
+        $hasEnded = $isScheduledToday && ($nowTimeStr >= $endTime);
 
-        if ($nowTimeStr >= $endTime) {
+        // ── TEMP DEBUG ──
+        $debugClassInfo[] = [
+            'class_id'          => $cls['id'],
+            'raw_days'          => $cls['days'],
+            'parsed_days'       => $scheduledDays,
+            'today_day_name'    => $todayDayName,
+            'is_scheduled_today'=> $isScheduledToday,
+            'raw_end_time'      => $cls['end_time'],
+            'normalized_end'    => $endTime,
+            'now_time_str'      => $nowTimeStr,
+            'marked_as_ended'   => $hasEnded,
+        ];
+
+        if ($hasEnded) {
             $endedClassIds[] = (int)$cls['id'];
         }
     }
@@ -281,20 +296,34 @@ try {
         ];
     }, $activeClassesRaw);
 
+    $responseData = [
+        'instructorName'   => $user['name'] ?? 'Instructor',
+        'date'             => $displayDate,
+        'enrolledStudents' => $totalEnrolled,
+        'enrolledClasses'  => (int)($classCount['total'] ?? 0),
+        'presentToday'     => $presentCount,
+        'absentToday'      => $absentCount,
+        'attendanceRate'   => $attendanceRate,
+        'recentAttendance' => $recentAttendance,
+        'classBreakdown'   => $classBreakdown,
+        'activeClasses'    => $activeClasses,
+    ];
+
+    // ── TEMP DEBUG — hit this endpoint with ?debug=1 to see raw schedule
+    // comparison values. Remove this whole block once the issue is found. ──
+    if (isset($_GET['debug']) && $_GET['debug'] === '1') {
+        $responseData['_debug'] = [
+            'ph_now'          => $phNow->format('Y-m-d H:i:s'),
+            'today_day_name'  => $todayDayName,
+            'now_time_str'    => $nowTimeStr,
+            'classes'         => $debugClassInfo,
+            'ended_class_ids' => $endedClassIds,
+        ];
+    }
+
     echo json_encode([
         'success' => true,
-        'data'    => [
-            'instructorName'   => $user['name'] ?? 'Instructor',
-            'date'             => $displayDate,
-            'enrolledStudents' => $totalEnrolled,
-            'enrolledClasses'  => (int)($classCount['total'] ?? 0),
-            'presentToday'     => $presentCount,
-            'absentToday'      => $absentCount,
-            'attendanceRate'   => $attendanceRate,
-            'recentAttendance' => $recentAttendance,
-            'classBreakdown'   => $classBreakdown,
-            'activeClasses'    => $activeClasses,
-        ]
+        'data'    => $responseData
     ]);
 
 } catch (Exception $e) {
