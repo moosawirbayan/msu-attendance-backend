@@ -97,5 +97,93 @@ class NotificationService {
 
         return $this->sendEmail($toEmail, $name, $subject, $htmlBody, $textBody);
     }
+
+    // ═══════════ BAGONG DAGDAG — QR Email Feature ═══════════
+    public function sendQrCodeEmail($toEmail, $studentName, $studentIdNumber, $className, $qrValue) {
+        if (empty($toEmail)) return false;
+
+        $qrApiUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' . urlencode($qrValue);
+        $ch = curl_init($qrApiUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 15,
+        ]);
+        $qrImageData = curl_exec($ch);
+        $qrError = curl_error($ch);
+        curl_close($ch);
+
+        if ($qrError || !$qrImageData) {
+            error_log('[QR API] Failed to generate QR: ' . $qrError);
+            return false;
+        }
+
+        $qrBase64 = base64_encode($qrImageData);
+
+        $safeName      = htmlspecialchars($studentName,     ENT_QUOTES, 'UTF-8');
+        $safeClassName = htmlspecialchars($className,       ENT_QUOTES, 'UTF-8');
+        $safeStudentId = htmlspecialchars($studentIdNumber,  ENT_QUOTES, 'UTF-8');
+
+        $subject  = "Your Attendance QR Code – {$safeClassName}";
+        $htmlBody = "
+            <p>Hi {$safeName},</p>
+            <p>Attached is your QR code for <strong>{$safeClassName}</strong>. 
+            Show this to your instructor to mark your attendance.</p>
+            <p><strong>Student ID:</strong> {$safeStudentId}</p>
+            <p>Automated Classroom Attendance</p>
+        ";
+        $textBody = "Hi {$studentName}, attached is your QR code for {$className}. Student ID: {$studentIdNumber}.";
+
+        return $this->sendEmailWithAttachment($toEmail, $studentName, $subject, $htmlBody, $textBody, $qrBase64, 'qrcode.png');
+    }
+
+    private function sendEmailWithAttachment($toEmail, $toName, $subject, $htmlBody, $textBody, $attachmentBase64, $attachmentName) {
+        $payload = json_encode([
+            'sender' => [
+                'email' => $this->fromEmail,
+                'name'  => $this->fromName,
+            ],
+            'to' => [
+                [
+                    'email' => $toEmail,
+                    'name'  => $toName ?: 'Student',
+                ]
+            ],
+            'subject'     => $subject,
+            'htmlContent' => $htmlBody,
+            'textContent' => $textBody,
+            'attachment'  => [
+                [
+                    'content' => $attachmentBase64,
+                    'name'    => $attachmentName,
+                ]
+            ],
+        ]);
+
+        $ch = curl_init('https://api.brevo.com/v3/smtp/email');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $payload,
+            CURLOPT_HTTPHEADER     => [
+                'accept: application/json',
+                'api-key: ' . $this->apiKey,
+                'content-type: application/json',
+            ],
+        ]);
+
+        $response  = curl_exec($ch);
+        $httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($curlError) {
+            error_log('[BREVO] cURL error: ' . $curlError);
+            return false;
+        }
+
+        error_log('[BREVO] HTTP ' . $httpCode . ' — ' . $response);
+        return $httpCode >= 200 && $httpCode < 300;
+    }
+    // ═══════════ END BAGONG DAGDAG ═══════════
 }
 ?>
